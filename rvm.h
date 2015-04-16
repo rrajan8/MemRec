@@ -12,53 +12,53 @@
 #include <fstream>
 #include <list>
 #include <vector>
+#include <stack>
+#include <unordered_map>
+
+#define MAPPED 1
+#define NOTMAPPED 0
 
 using namespace std;
 
-#define ALREADYMAPPED 0
-#define NOTMAPPED 1
-
-#define BEINGUSED 0
-#define NOTBEINGUSED 1
 
 typedef struct _seg_struct
 {
-	int seg_size;
-	void* data;
-	char* segname;
-	int seg_state;
-	int beingused;
-	void* undo_log;
-	int fh;
+	char[100] segname;
+	void* baseaddr;
+	int currsize;
+	int size2use;
+	trans_t trans_owner;	//pointer to the transaction struct that owns us
+	int fh;					//file handle
 } seg_struct;
 
 struct _rvm_struct
 {
+	int id;
 	char directory[1000];
-	vector<seg_struct*> seglist;
-	int rvm_numsegs;
-	int logfd;	//log file descriptor
+	unordered_map<void*, seg_struct*> seglist;
+	int numsegs;
 };
 
-typedef struct _transzone_struct
+typedef struct _rvm_struct* rvm_t;
+
+typedef struct _tzone_struct
 {
-	seg_struct* parent_seg;
+	seg_struct* parentseg;
 	int offset;
-	int tzone_size;
+	int size;
+	void* memdata;
 } tzone_struct;
 
 struct _trans_struct
 {
-	struct _rvm_struct* trans_rvm;
-	vector<seg_struct*> seglist;
-	int trans_numsegs;
-	vector<tzone_struct*> tzones;
-	int trans_numzones;
-	int transid;
-	int trans_state;
+	int id;
+	rvm_t* rvm;
+	unordered_map<void*, seg_struct*> seglist;
+	int numsegs;
+	stack<tzone_struct*> undolog;
+	int numtzones;
 };
 
-typedef struct _rvm_struct* rvm_t;
 typedef struct _trans_struct* trans_t;
 
 rvm_t rvm_init(const char *directory);
