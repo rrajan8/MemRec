@@ -1,333 +1,489 @@
 #include "rvm.h"
-
+#include <string>
+#include <sstream>
+#include <iostream>
 using namespace std;
 
-void getlogdata(rvm_t rvm, seg_struct* segment)
-{
-	int offset, size;
-	struct stat fs;
-	fstream logfile;
-	string str;
-	size_t index1, index2, index3;
-	char* path = (char*) malloc(sizeof(char)*(strlen(rvm->directory)+4));
-	//create log path based on rvm directory
-	strcpy(path, rvm->directory);
-	strcat(path, "/log");
-	//use stat to find size of log file
-	stat(path, &fs);
-	if(fs.st_size == 0)
-	{
-		//empty log file
-		printf("empty logfile\n");
-		return;
-	}
-	//use path to open fstream
-	logfile.open(path, ios::binary | ios::in);
-	while(logfile.good())
-	{
-		getline(logfile, str);
-		//find the segment name 
-		index1 = str.find("Segbase:");
-		if(index1 != string::npos) //npos is indication of not finding it
-		{
-			while( logfile.good() )
-			{
-				getline(logfile, str);
-				index2 = str.find("Offset:");
-				index3 = str.find(" ");
-				if((index2!=string::npos) &&(index3!=string::npos))
-				{
-					offset = atoi((str.substr(index2+7, index3-index2)).c_str());
-					size = atoi((str.substr(index3+6)).c_str());
-					//write changes to memory, seen when segments are mapped
-					logfile.read(((char*)segment->data)+offset, size);
-					break;
-				} 
-			}
-		}
-
-	}
-	logfile.close();
-}
+int rvm_id = 0;
+int trans_id = 0;
 
 rvm_t rvm_init(const char *directory)
 //Initialize the library with the specified directory as backing store.
 {	
 	char path[200];
 	struct stat fs;
+	
+	stringstream filenames;
+
 	//initialize the rvm 
-	rvm_t rvm = (rvm_t) malloc(sizeof(rvm_t));
+	rvm_t rvm = new struct _rvm_struct;
+	rvm->id = rvm_id++;
+	rvm->numsegs = 0;
 	//check is directory exists or not
-	strcpy(rvm->directory, directory);
+	
+	string valstr(directory);
+	
+	rvm->directory = valstr;
+	
+	
+	filenames.clear();
 	//stat fills fs struct with info about directory// 0 success -1 failed
 	if(stat(directory, &fs) == -1){
 		//directory doesnt exist, create it
+		
 		strcpy(path, "mkdir ");
+		
 		strcat(path, directory);
+	
 		//call terminal instruction to make new directory
 		system(path);
+		
 		//new directory created!
 		//populate rvm structure
-		strcpy(path, directory);
-		strcat(path, "/log");
-		// open log file with read/write priviledges and if not existing, create
-		rvm->logfd = open(path, O_RDWR | O_CREAT);
-		close(rvm->logfd);
-		rvm->rvm_numsegs = 0;	
+		// this is a new directory so there are no segments
 	}
 	else
 	{
 		//the directory already exists, simply populate the rvm structure
+		
+		string location;
+		
 		strcpy(path, directory);
-		strcat(path, "/log");
-		// open log file with read/write priviledges, already exists
-		rvm->logfd = open(path, O_RDWR);
-		close(rvm->logfd);
-		rvm->rvm_numsegs = 0;
+		
+		filenames << path;
+		filenames >> location;
+		
+		string command = "/bin/ls ";
+		command.append(location);
+		command.append("/*.seg");
+		
+		int numsegs = 0;
+		
+		FILE *proc = popen(command.c_str(),"r");
+		char buf[300];
+		filenames.clear();
+		while ( !feof(proc) && fgets(buf,sizeof(buf),proc) )
+		{
+			string temp;
+			seg_struct* seg = new seg_struct;
+			
+			filenames <<  buf;
+			filenames >> temp;
+			
+			size_t i = temp.rfind("/", temp.length());
+			seg->segname = temp.substr(i+1,temp.length()-1);
+			 
+			seg->currsize = -1;
+			seg->size2use = -1;
+			seg->trans_owner = NULL;
+			seg->baseaddr = NULL;
+			rvm->seglist[seg->segname] = seg;
+			
+			temp.append(".log");
+			ofstream myfile;
+  			myfile.open (temp, ofstream::in);
+  			myfile.close();
+			
+			rvm->numsegs++;
+		}
 	}
-	system("chmod -R 777 *");
+	system("chmod -R 777 *"); //will have to fix this later
 	return rvm;
 }
 
 void *rvm_map(rvm_t rvm, const char *segname, int size_to_create)
 {
-	int x, pos, fd;
-	struct stat fs;
-	char* segmentname = (char*)malloc(sizeof(char)*(strlen(segname)+strlen(rvm->directory)+1));
-	strcpy(segmentname, rvm->directory);
-	strcat(segmentname, "/");
-	strcat(segmentname, segname);
-	//check if the segname is already in the list of segments for the rvm
-	pos = -1;
-	for(x=0;x<rvm->rvm_numsegs;x++){
-		if(!strcmp(rvm->seglist[x]->segname, segname))
-		{
-			pos = x;
-		}
-	}
-	if((pos == -1) || (rvm->seglist[pos]->seg_state == NOTMAPPED))
+	cout << "lol2" << endl;
+	stringstream ss;
+	string seg_name;
+	ss << segname;
+	ss >> seg_name;
+	seg_name.append(".seg");
+	cout << "lol1" << endl;
+	if(rvm->seglist.find(seg_name) == rvm->seglist.end())
 	{
-		//segment is not mapped as yet, we have to map it
-		//initialize segment and populate new segment entry
-		seg_struct* segment = (seg_struct*) malloc (sizeof(seg_struct));
-		segment->segname = (char*) malloc (sizeof(char)*strlen(segmentname));
-		strcpy(segment->segname, segmentname);
-		segment->seg_size = size_to_create;
-
-		if(stat(segmentname, &fs) == -1)
-		{
-			fd = open(segmentname, O_WRONLY | O_CREAT | O_EXCL, (mode_t)0600);
-			//this stretches the file to match the desired size_to_create
-			lseek(fd, size_to_create-1, SEEK_SET);
-			//write to end of file to confirm stretch
-			write(fd,"",1);
-		}
-		else
-		{
-			fd = open(segmentname, O_RDWR);
-			stat(segmentname, &fs);
-			if(fs.st_size < size_to_create)
-			{
-				//if existing mapped segment is less than desired size_to_create, then stretch it
-				lseek(fd, size_to_create-1, SEEK_SET);
-				//write to end of file to confirm stretch
-				write(fd, "", 1);
-			}
-		}
-
-		//populate reset of segment structure
+		//createing metadata for the segment
+		seg_struct* seg = new seg_struct;
+		seg->segname = seg_name;
+		seg->currsize = -1;
+		seg->size2use = -1;
+		seg->trans_owner = NULL;
+		seg->baseaddr = NULL;
+		rvm->seglist[seg->segname] = seg;
+		rvm->numsegs++;
 		
-		lseek(fd, 0, SEEK_SET);
-		segment->fh = fd;
-		segment->seg_state = ALREADYMAPPED;
-		segment->beingused = NOTBEINGUSED;
-		segment->data = malloc(sizeof(char)*size_to_create);
-		segment->undo_log = malloc(sizeof(char)*size_to_create);
-		//read from file descriptor into segment data - mapping the disk to memory
-		read(fd, segment->data, size_to_create);
-		//place same data in undo log for now
-		memcpy(segment->undo_log, segment->data, size_to_create);
-
-		//check the log for data that already exists for this segment
-		getlogdata(rvm, segment);
-
-		//update rvm seg count
-		rvm->rvm_numsegs++;
-
-		close(fd);
-
-		return segment->data;
+		//create a new segment file
+		
+		string directory = rvm->directory;
+		
+		directory.append("/");
+	
+		directory.append(seg_name);
+		cout << directory << endl;
+		ofstream myfile;
+  		myfile.open (directory, ofstream::out);
+  		myfile.close();
+  	
+  		//create a new log file
+		directory.append(".log");
+  		myfile.open (directory, ofstream::out);
+  		myfile.close();
+	}
+	
+	
+	if(rvm->seglist[seg_name]->trans_owner != NULL)
+	{
+		cout << "cannot map: segment undergoing transaction" << endl;
+	}
+	
+	if(rvm->seglist[seg_name]->baseaddr == NULL) //unmapped segment
+	{
+		
+		rvm->seglist[seg_name]->baseaddr = (void*)malloc(size_to_create);
+		rvm->seglist[seg_name]->size2use = size_to_create;
+		cout << "lol0989etartAdsfddfsad" << endl;
+		rvm->seglist[seg_name]->currsize = size_to_create;
+		
+		rvm->m_seglist[rvm->seglist[seg_name]->baseaddr] = rvm->seglist[seg_name];
+		cout << "lol0989etartAdsad" << endl;
 	}
 	else
 	{
-		//segment already mapped
-		printf("segment already mapped\n");
-		exit(0);
+		cout << "segment is already mapped" << endl;
+		if(rvm->seglist[seg_name]->currsize >= size_to_create)
+		{
+			rvm->seglist[seg_name]->size2use = 	size_to_create;
+		}
+		else
+		{
+			void* temp = (void*) malloc(size_to_create);
+			memcpy ( temp, rvm->seglist[seg_name]->baseaddr, rvm->seglist[seg_name]->currsize);
+			free(rvm->seglist[seg_name]->baseaddr);
+			rvm->seglist[seg_name]->baseaddr = temp;
+		}
 	}
+	
+	rvm_truncate_remap_log(rvm, seg_name);
+	cout << "lol0989etarsadtAdsad" << endl;
+	return rvm->seglist[seg_name]->baseaddr;
 }
 
 
 void rvm_unmap(rvm_t rvm, void *segbase)
-{	
-	int x;
-	for(x=0; x<rvm->rvm_numsegs; x++)
-	{
-		if(rvm->seglist[x]->data == segbase)
-		{
-			rvm->seglist[x]->seg_state = NOTMAPPED;
-			return;
-		}
+{
+	if(rvm->m_seglist[segbase]->trans_owner != NULL){
+		cout << "cannot unmap: segment is in a transaction" << endl;
+		return;
 	}
+	rvm->m_seglist[segbase]->currsize = -1;
+	rvm->m_seglist[segbase]->size2use = -1;
+	free(rvm->m_seglist[segbase]->baseaddr);
+	rvm->m_seglist[segbase]->baseaddr = NULL;
+	rvm->m_seglist.erase(segbase);
 	return;
 }
 
 void rvm_destroy(rvm_t rvm, const char *segname)
 {
-	int x = 0;
-	int pos = -1;
-	char path[1000];
-	strcpy(path, rvm->directory);
-	strcat(path, "/");
-	strcat(path, segname);
-
-	//find position of segment name in rvm
-	for(x=0; x<rvm->rvm_numsegs; x++)
+	string seg_name = segname;
+	seg_name.append(".seg");
+	if(rvm->seglist[seg_name]->baseaddr != NULL )
 	{
-		if(!strcmp(segname, rvm->seglist[x]->segname))
-		{
-			pos = x;
-		}
-	}
-
-	if(pos != -1)
-	{
-		//found the segment in the list
-		if(rvm->seglist[pos]->seg_state == NOTMAPPED)
-		{			
-			remove(path);
-			return;
-		}
-
-		else
-		{
-			printf("cannot destroy mapped segment\n");
-			return;
-		}
-	}
-	else
-		//not in segment list
-	{
-		remove(path);
+		cout << "cannot destroy: is mapped" << endl;
 		return;
 	}
+	string del("rm ");
+	string directory = rvm->directory;
+	directory.append("/");
+	directory.append(seg_name);
+	del.append(directory);
+	system(del.c_str());
+	del.append("log");
+	system(del.c_str());
+	
+	rvm->seglist.erase(seg_name);
+	rvm->numsegs--;
 }
 
 trans_t rvm_begin_trans(rvm_t rvm, int numsegs, void **segbases)
 {
-	int pos = -1;
-	int i;
-	for(i = 0; i<numsegs; i++)
+	trans_t trans = new _trans_struct;
+	trans->id = trans_id++;
+	trans->rvm = rvm;
+	trans->numsegs = numsegs;
+	trans->numtzones = 0;
+	
+	for(int i = 0; i<numsegs; i++)
 	{
-		pos = -1;
-		int x = 0;
-		for(x=0; x<rvm->rvm_numsegs;x++)
+		if(rvm->m_seglist.find(segbases[i]) == rvm->m_seglist.end() || rvm->m_seglist[segbases[i]]->trans_owner != NULL)
 		{
-			if(rvm->seglist[x]->data == segbases[i])
-			{
-				//found the segment - check if already in use
-				pos = x;
-				if(rvm->seglist[x]->beingused == BEINGUSED)
-				{
-					//invalide use
-					printf("segment already being used\n");
-					return (trans_t) -1;
-				}
-				//set to be used now
-				rvm->seglist[x]->beingused = BEINGUSED;
-			}
+			trans->seglist.clear();
+			delete trans;
+			return (trans_t)-1;
 		}
-		if(pos == -1)
-		{
-			printf("segment does not exist\n");
-			return (trans_t) -1;
-		}
+		
+		trans->seglist[segbases[i]] = rvm->m_seglist[segbases[i]];
+		trans->seglist[segbases[i]]->trans_owner = trans;
+		
+		
 	}
 
-	trans_t trans = (trans_t)malloc(sizeof(trans_t));
-	trans->trans_rvm = rvm;
-	trans->trans_numsegs = numsegs;
-	trans->trans_numzones = 0;
-	for(i=0; i<numsegs; i++)
-	{
-		int x = 0;
-		for(x=0; x<rvm->rvm_numsegs;x++)
-		{
-			if(rvm->seglist[x]->data == segbases[i])
-			{ 
-				trans->seglist.push_back(rvm->seglist[x]);
-			}
-		}
-	}
+	
 	return trans;	
 }
 
 
 void rvm_about_to_modify(trans_t tid, void *segbase, int offset, int size)
 {
-	tzone_struct* tzone = (tzone_struct*)malloc(sizeof(tzone_struct));
-	int pos = -1;
-	int x = 0;
-	for (x=0;x<tid->trans_numsegs;x++)
+	
+	if(tid->seglist.find(segbase) == tid->seglist.end())
 	{
-		if(tid->seglist[x]->data == segbase){
-			//found it
-			pos = x;
-			tzone->parent_seg = tid->seglist[x];
-			tzone->offset = offset;
-			tzone->tzone_size = size;
-		}
-	}
-	if(pos == -1){
-		printf("segment not found\n");
+		cout << "error: segment not part of transaction id " << tid->id << endl;
 		return;
 	}
-	tid->tzones.push_back(tzone);
-	tid->trans_numzones++;
-	return;
+	
+	tzone_struct* logger = new tzone_struct;
+	logger->parentseg = tid->seglist[segbase];
+	logger->offset = offset;
+	logger->size = size;
+	logger->memdata = malloc(size);
+	
+	tid->undolog.push_back(logger);
+	tid->numtzones++;
+	
 }
 
 
 void rvm_commit_trans(trans_t tid)
 {
-	int i;
-	char logfile[200];
-	strcpy(logfile, tid->trans_rvm->directory);
-	strcat(logfile, "/log");
-
-	int lf = open(logfile, O_WRONLY | O_APPEND);
-	for(i=0; i<tid->trans_numzones; i++)
+	//modifies the logfile of each segment affected by transaction
+	//use the undolog to get the offsets and size of memdata to commit to logfile
+	// segmment-(baseaddr + offset) -> start point
+	// write (size) bytes from there to log
+	// do not use the unlog's data from the tzones
+	
+	int offset, size;
+	void* segaddr;
+	tzone_struct* tzone;
+	
+	//traverse the undolog to find segbases, offsets and sizes
+	//get the undolog in the transaction to be committed
+	//traverse logfile from oldest to newest entry
+	for (int i = 0; i < tid->numtzones; i++)
 	{
-		write(lf, "Segbase:", 8);
-		write(lf, tid->tzones[i]->parent_seg->segname, strlen(tid->tzones[i]->parent_seg->segname));
-		write(lf, "\n", 1);
-		char buffer[100];
-		sprintf(buffer, "%d", tid->tzones[i]->offset);
-		write(lf, "Offset:", 7);
-		write(lf, buffer, strlen(buffer));
-		write(lf, " ", 1);
-		sprintf(buffer, "%d", tid->tzones[i]->tzone_size);
-		write(lf, "Size:", 5);
-        write(lf, buffer, strlen(buffer));
-		write(lf, "\n", 1);
-		write(lf, tid->tzones[i]->parent_seg->data + tid->tzones[i]->offset, tid->tzones[i]->tzone_size);
-		write(lf, "\n\n", 2);
-		memcpy(tid->tzones[i]->parent_seg->undo_log + tid->tzones[i]->offset, tid->tzones[i]->parent_seg->data + tid->tzones[i]->offset, tid->tzones[i]->tzone_size);
-		tid->tzones[i]->parent_seg->beingused = NOTBEINGUSED;
+		tzone = tid->undolog[i];
+		//for each tzone, get the offset and size and parentseg base address
+		segaddr = tzone->parentseg->baseaddr;
+		offset = tzone->offset;
+		size = tzone->size;
+		//now we got to commit the memdata using the baseadd + offset + size to the logfile
+		//get the parent_segment's logfile
+		string path;
+		path = tid->rvm->directory;
+		//strcpy(path, tid->rvm->directory.c_str());
+		path.append("/");
+		//strcat(path, "/");
+		path.append(tzone->parentseg->segname);
+		path.append(".log");
+		//strcat(path, tzone->parentseg->segname.c_str());
+		//strcat(path, ".log");
+		//now we have the pseg.log file to commit in to
+		std::fstream fs;
+		fs.open (path, std::fstream::in | std::fstream::out | std::fstream::app | std::fstream::binary);
+		//read/write/append/binary mode
+		// offset <|||||> size <|||||> /n data (size) >
+		fs <<  offset << "|||||" << size << "|||||" << endl ;
+		//put memdata followed by tab for delimiter
+		fs.write(((char*)segaddr+offset), size);
+		fs << endl;
+		fs.close();
 	}
-	close(lf);
-	system("chmod -R 777 *");	
+	//finished committing the transactions, the segments will have no more transownwer
+	for(int i = 0; i < tid->numtzones; i++)
+	{
+		tzone = tid->undolog[i];
+		//set the manager of all parentsegs to NULL
+		tzone->parentseg->trans_owner = NULL;
+	}
+	
 }
 
 
-void rvm_abort_trans(trans_t tid);
-void rvm_truncate_log(rvm_t rvm);
+void rvm_abort_trans(trans_t tid)
+{
+	//aborting - copy data from the undo logs back into the memdata
+	// copy memdata from zone->data tp memdata
+	
+	int offset, size;
+	void* segaddr;
+	tzone_struct* rtzone;
+	
+	//traverse tzones most recent to latest - from bottom to top
+	//std::vector<tzone_struct>::reverse_iterator rtzone = tid->undolog.rbegin();
+	for(int i = tid->numtzones-1; i >= 0; i--)
+	{
+		//copy from tzone->data to parent_seg->memdata - undoing transactions in reverse
+		//memcpy (Dest. src. size)
+		rtzone = tid->undolog[i];
+		segaddr = rtzone->parentseg->baseaddr;
+		offset = rtzone->offset;
+		size = rtzone->size;
+		memcpy((char*)segaddr+offset, rtzone->memdata, size);	
+	}
+	//finished aborting the transactions, the segments will have no more transownwer
+	for(int i = 0; i < tid->numtzones; i++)
+	{
+		rtzone = tid->undolog[i];
+		//set the manager of all parentsegs to NULL
+		rtzone->parentseg->trans_owner = NULL;
+	}
+	
+}
+
+
+void rvm_truncate_log(rvm_t rvm)
+{
+	// go through all the logs of each segment and commit the data to the segment file
+	string segname;
+	seg_struct* segment;
+	//iterate through all the logs/segment files
+	for(msegmap::iterator it = rvm->seglist.begin(); it != rvm->seglist.end(); ++it)
+	{
+		//each of these segments have log files
+		segname = it->first;	//get the key - base address memdata
+		segment = it->second;	///get the segment
+		//now we can get the name of the segment to  create the path of file
+		string segpath;
+		segpath = rvm->directory;
+		//strcpy(path, tid->rvm->directory.c_str());
+		segpath.append("/");
+		//strcat(path, "/");
+		segpath.append(segment->segname); 
+		//segpath.append(".seg");
+		string logpath;
+		logpath = rvm->directory;
+		//strcpy(path, tid->rvm->directory.c_str());
+		logpath.append("/");
+		//strcat(path, "/");
+		logpath.append(segment->segname);
+		logpath.append(".log");
+		//now we have both file paths - log and seg 
+
+		struct stat filestat;
+		//check if logfile is empty, then nothing to do
+		stat(logpath.c_str(), &filestat);
+		if(filestat.st_size == 0){
+			printf("logfile is empty - nothing to truncate - in trunc\n");
+			//go to next logfile
+			continue;
+		}
+		
+		//create 2 buffers - one to hold the entire segment file - one to hold the data in log to copy over
+		//lets create the buffer for the segment file	
+		fstream fs;
+		fs.open (segpath, std::fstream::in | std::fstream::out | std::fstream::binary);
+		fs.seekg(0, fs.end);
+		int seglength = fs.tellg();
+		fs.seekg(0, fs.beg);
+		char* segbuff = new char[seglength];
+		fs.read(segbuff, seglength);
+		fs.close();
+		//now we find the data portion of the log file with corresponding size and offset
+		
+		//get data from log file into buffer - line by line
+		char* line = NULL;
+		size_t len = 0;
+		ssize_t rd;
+		FILE* logfp = fopen(logpath.c_str(), "r");
+	    rd = getline(&line, &len, logfp);
+	    while(rd != -1)
+	    {
+	    	//iterate line by line
+	    	//sort through line based on delimiter
+	    	int offset = atoi(strtok(line, "|||||"));
+	    	int size = atoi(strtok(NULL, "|||||"));
+	    	//fp at end of line - grab the data from logfile now
+	    	//read from the logfile (@fp + size) into the segmentbuffer(+offset)
+	    	fread((segbuff + offset), 1, size, logfp);
+	    	//now segbuffer has the data from log - move to next line of log
+	    	free(line);
+	    	line = NULL;
+	    	rd = getline(&line, &len, logfp);
+	    }
+	    //segbuff has all truncated data from logfile
+	    //create new segment logfile using segbuffer
+	    FILE* segfp = fopen(segpath.c_str(), "w");
+	    fwrite(segbuff, 1, seglength, segfp);
+	    fclose(segfp);
+	    fclose(logfp);
+	    //log file completely truncated, move on to next segment in directory
+	}
+}
+
+void rvm_truncate_remap_log(rvm_t rvm, string segname)
+{
+	//now we can get the name of the segment to  create the path of file
+	string segpath;
+	segpath = rvm->directory;
+	//strcpy(path, tid->rvm->directory.c_str());
+	segpath.append("/");
+	//strcat(path, "/");
+	segpath.append(segname); 
+	//segpath.append(".seg");
+	string logpath;
+	logpath = rvm->directory;
+	//strcpy(path, tid->rvm->directory.c_str());
+	logpath.append("/");
+	//strcat(path, "/");
+	logpath.append(segname);
+	logpath.append(".log");
+	//now we have both file paths - log and seg 
+	
+	struct stat filestat;
+	//check if logfile is empty, then nothing to do
+	stat(logpath.c_str(), &filestat);
+	if(filestat.st_size == 0){
+		printf("logfile is empty - nothing to truncate - in trunc_remap\n");
+		return;
+	}
+
+	//create 2 buffers - one to hold the entire segment file - one to hold the data in log to copy over
+	//lets create the buffer for the segment file	
+	fstream fs;
+	fs.open (segpath, std::fstream::in | std::fstream::out | std::fstream::binary);
+	fs.seekg(0, fs.end);
+	int seglength = fs.tellg();
+	fs.seekg(0, fs.beg);
+	char* segbuff = new char[seglength];
+	fs.read(segbuff, seglength);
+	fs.close();
+	//now we find the data portion of the log file with corresponding size and offset
+	
+	//get data from log file into buffer - line by line
+	char* line = NULL;
+	size_t len = 0;
+	ssize_t rd;
+	FILE* logfp = fopen(logpath.c_str(), "r");
+    rd = getline(&line, &len, logfp);
+    while(rd != -1)
+    {
+    	//iterate line by line
+    	//sort through line based on delimiter
+    	int offset = atoi(strtok(line, "|||||"));
+    	int size = atoi(strtok(NULL, "|||||"));
+    	//fp at end of line - grab the data from logfile now
+    	//read from the logfile (@fp + size) into the segmentbuffer(+offset)
+    	fread((segbuff + offset), 1, size, logfp);
+    	//now segbuffer has the data from log - move to next line of log
+    	free(line);
+    	line = NULL;
+    	rd = getline(&line, &len, logfp);
+    }
+    //segbuff has all truncated data from logfile
+    //create new segment logfile using segbuffer
+    FILE* segfp = fopen(segpath.c_str(), "w");
+    fwrite(segbuff, 1, seglength, segfp);
+    fclose(segfp);
+    fclose(logfp);
+    //log file completely truncated, move on to next segment in directory
+}

@@ -21,21 +21,18 @@
 using namespace std;
 
 
-typedef struct _seg_struct
-{
-	char[100] segname;
-	void* baseaddr;
-	int currsize;
-	int size2use;
-	trans_t trans_owner;	//pointer to the transaction struct that owns us
-	int fh;					//file handle
-} seg_struct;
+
+typedef struct _trans_struct* trans_t;
+typedef struct _seg_struct seg_struct;
+
+typedef std::unordered_map<string, seg_struct*> msegmap;
 
 struct _rvm_struct
 {
 	int id;
-	char directory[1000];
-	unordered_map<void*, seg_struct*> seglist;
+	string directory;
+	unordered_map<void*, seg_struct*> m_seglist;
+	unordered_map<string, seg_struct*> seglist;
 	int numsegs;
 };
 
@@ -52,14 +49,25 @@ typedef struct _tzone_struct
 struct _trans_struct
 {
 	int id;
-	rvm_t* rvm;
+	rvm_t rvm;
 	unordered_map<void*, seg_struct*> seglist;
 	int numsegs;
-	stack<tzone_struct*> undolog;
+	//stack<tzone_struct*> undolog;
+	//std::deque<tzone_struct*> undolog ;
+	std::vector<tzone_struct*> undolog;
 	int numtzones;
 };
 
-typedef struct _trans_struct* trans_t;
+
+
+struct _seg_struct
+{
+	string segname;			//.seg includeds
+	void* baseaddr;
+	int currsize;
+	int size2use;
+	trans_t trans_owner;	//pointer to the transaction struct that owns us
+};
 
 rvm_t rvm_init(const char *directory);
 void *rvm_map(rvm_t rvm, const char *segname, int size_to_create);
@@ -70,5 +78,5 @@ void rvm_about_to_modify(trans_t tid, void *segbase, int offset, int size);
 void rvm_commit_trans(trans_t tid);
 void rvm_abort_trans(trans_t tid);
 void rvm_truncate_log(rvm_t rvm);
-
+void rvm_truncate_remap_log(rvm_t rvm, string segname);
 #endif
