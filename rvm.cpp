@@ -1,7 +1,10 @@
-#include "rvm.h"
+#include "rvm_internal.h"
 #include <string>
 #include <sstream>
 #include <iostream>
+#include <fstream>
+
+
 using namespace std;
 
 int rvm_id = 0;
@@ -55,15 +58,23 @@ rvm_t rvm_init(const char *directory)
 		
 		string command = "/bin/ls ";
 		command.append(location);
-		command.append("/*.seg");
+		command.append("/*.seg 2>&1");
 		
 		int numsegs = 0;
-		
+		int flag = 1;
 		FILE *proc = popen(command.c_str(),"r");
 		char buf[300];
 		filenames.clear();
-		while ( !feof(proc) && fgets(buf,sizeof(buf),proc) )
+		
+		while ( !feof(proc) && fgets(buf,sizeof(buf),proc) && flag)
 		{
+			char* check;
+			check = strstr(buf, "No such file or directory");
+			if(check != NULL){
+				flag = 0;
+				break;
+			}
+			
 			string temp;
 			seg_struct* seg = new seg_struct;
 			
@@ -93,13 +104,11 @@ rvm_t rvm_init(const char *directory)
 
 void *rvm_map(rvm_t rvm, const char *segname, int size_to_create)
 {
-	cout << "lol2" << endl;
 	stringstream ss;
 	string seg_name;
 	ss << segname;
 	ss >> seg_name;
 	seg_name.append(".seg");
-	cout << "lol1" << endl;
 	if(rvm->seglist.find(seg_name) == rvm->seglist.end())
 	{
 		//createing metadata for the segment
@@ -119,21 +128,26 @@ void *rvm_map(rvm_t rvm, const char *segname, int size_to_create)
 		directory.append("/");
 	
 		directory.append(seg_name);
-		cout << directory << endl;
+		
+		FILE * pFile;
+		pFile = fopen (directory.c_str(),"w");
+  		fseek ( pFile , size_to_create-1 , SEEK_SET );
+  		fwrite ("0" , 1, 1, pFile);
+  		fclose (pFile);
+  		
 		ofstream myfile;
-  		myfile.open (directory, ofstream::out);
-  		myfile.close();
-  	
   		//create a new log file
 		directory.append(".log");
   		myfile.open (directory, ofstream::out);
   		myfile.close();
 	}
 	
+	rvm_truncate_remap_log(rvm, seg_name);
 	
 	if(rvm->seglist[seg_name]->trans_owner != NULL)
 	{
 		cout << "cannot map: segment undergoing transaction" << endl;
+		return NULL;
 	}
 	
 	if(rvm->seglist[seg_name]->baseaddr == NULL) //unmapped segment
@@ -141,15 +155,19 @@ void *rvm_map(rvm_t rvm, const char *segname, int size_to_create)
 		
 		rvm->seglist[seg_name]->baseaddr = (void*)malloc(size_to_create);
 		rvm->seglist[seg_name]->size2use = size_to_create;
-		cout << "lol0989etartAdsfddfsad" << endl;
 		rvm->seglist[seg_name]->currsize = size_to_create;
 		
+		
+		string directory = rvm->directory;
+		directory.append("/");
+		directory.append(seg_name);
+  		
+  		
+		
 		rvm->m_seglist[rvm->seglist[seg_name]->baseaddr] = rvm->seglist[seg_name];
-		cout << "lol0989etartAdsad" << endl;
 	}
 	else
 	{
-		cout << "segment is already mapped" << endl;
 		if(rvm->seglist[seg_name]->currsize >= size_to_create)
 		{
 			rvm->seglist[seg_name]->size2use = 	size_to_create;
@@ -160,11 +178,27 @@ void *rvm_map(rvm_t rvm, const char *segname, int size_to_create)
 			memcpy ( temp, rvm->seglist[seg_name]->baseaddr, rvm->seglist[seg_name]->currsize);
 			free(rvm->seglist[seg_name]->baseaddr);
 			rvm->seglist[seg_name]->baseaddr = temp;
+			
+			string directory = rvm->directory;
+			directory.append("/");
+			directory.append(seg_name);
+			
+			FILE * pFile;
+			pFile = fopen (directory.c_str(),"r+");
+  			fseek ( pFile , size_to_create-1 , SEEK_SET );
+  			fwrite ("0" , 1, 1, pFile);
+  			fclose (pFile);
 		}
 	}
 	
-	rvm_truncate_remap_log(rvm, seg_name);
-	cout << "lol0989etarsadtAdsad" << endl;
+	string directory = rvm->directory;
+	directory.append("/");
+	directory.append(seg_name);
+	FILE * pFile;
+	pFile = fopen (directory.c_str(),"r");
+	fread( rvm->seglist[seg_name]->baseaddr,1, rvm->seglist[seg_name]->size2use, pFile );
+	fclose(pFile);
+	
 	return rvm->seglist[seg_name]->baseaddr;
 }
 
@@ -187,6 +221,10 @@ void rvm_destroy(rvm_t rvm, const char *segname)
 {
 	string seg_name = segname;
 	seg_name.append(".seg");
+	if(rvm->seglist.find(seg_name) == rvm->seglist.end() )
+	{
+		return;
+	}
 	if(rvm->seglist[seg_name]->baseaddr != NULL )
 	{
 		cout << "cannot destroy: is mapped" << endl;
@@ -198,7 +236,7 @@ void rvm_destroy(rvm_t rvm, const char *segname)
 	directory.append(seg_name);
 	del.append(directory);
 	system(del.c_str());
-	del.append("log");
+	del.append(".log");
 	system(del.c_str());
 	
 	rvm->seglist.erase(seg_name);
@@ -217,9 +255,10 @@ trans_t rvm_begin_trans(rvm_t rvm, int numsegs, void **segbases)
 	{
 		if(rvm->m_seglist.find(segbases[i]) == rvm->m_seglist.end() || rvm->m_seglist[segbases[i]]->trans_owner != NULL)
 		{
+			cout << "error: cannot  start this transaction: " << trans->id << endl;
 			trans->seglist.clear();
 			delete trans;
-			return (trans_t)-1;
+			return (trans_t) -1;
 		}
 		
 		trans->seglist[segbases[i]] = rvm->m_seglist[segbases[i]];
@@ -235,6 +274,12 @@ trans_t rvm_begin_trans(rvm_t rvm, int numsegs, void **segbases)
 
 void rvm_about_to_modify(trans_t tid, void *segbase, int offset, int size)
 {
+	//check if there is a valid transaction - if not valid - nothing to do
+	if(((int64_t) tid) == -1)
+	 {
+	 	cout << "cannot modify: transaction is invalid" << endl;
+	 	return;
+	 }
 	
 	if(tid->seglist.find(segbase) == tid->seglist.end())
 	{
@@ -247,7 +292,7 @@ void rvm_about_to_modify(trans_t tid, void *segbase, int offset, int size)
 	logger->offset = offset;
 	logger->size = size;
 	logger->memdata = malloc(size);
-	
+	memcpy(logger->memdata, (char*)segbase + offset, size);
 	tid->undolog.push_back(logger);
 	tid->numtzones++;
 	
@@ -262,6 +307,13 @@ void rvm_commit_trans(trans_t tid)
 	// write (size) bytes from there to log
 	// do not use the unlog's data from the tzones
 	
+	//check if there is a valid transaction - if not valid - nothing to do
+	if(((int64_t) tid) == -1)
+	 {
+	 	cout << "cannot commit: transaction is invalid" << endl;
+	 	return;
+	 }
+	
 	int offset, size;
 	void* segaddr;
 	tzone_struct* tzone;
@@ -271,6 +323,7 @@ void rvm_commit_trans(trans_t tid)
 	//traverse logfile from oldest to newest entry
 	for (int i = 0; i < tid->numtzones; i++)
 	{
+		
 		tzone = tid->undolog[i];
 		//for each tzone, get the offset and size and parentseg base address
 		segaddr = tzone->parentseg->baseaddr;
@@ -280,13 +333,9 @@ void rvm_commit_trans(trans_t tid)
 		//get the parent_segment's logfile
 		string path;
 		path = tid->rvm->directory;
-		//strcpy(path, tid->rvm->directory.c_str());
 		path.append("/");
-		//strcat(path, "/");
 		path.append(tzone->parentseg->segname);
 		path.append(".log");
-		//strcat(path, tzone->parentseg->segname.c_str());
-		//strcat(path, ".log");
 		//now we have the pseg.log file to commit in to
 		std::fstream fs;
 		fs.open (path, std::fstream::in | std::fstream::out | std::fstream::app | std::fstream::binary);
@@ -295,7 +344,6 @@ void rvm_commit_trans(trans_t tid)
 		fs <<  offset << "|||||" << size << "|||||" << endl ;
 		//put memdata followed by tab for delimiter
 		fs.write(((char*)segaddr+offset), size);
-		fs << endl;
 		fs.close();
 	}
 	//finished committing the transactions, the segments will have no more transownwer
@@ -355,16 +403,11 @@ void rvm_truncate_log(rvm_t rvm)
 		//now we can get the name of the segment to  create the path of file
 		string segpath;
 		segpath = rvm->directory;
-		//strcpy(path, tid->rvm->directory.c_str());
 		segpath.append("/");
-		//strcat(path, "/");
 		segpath.append(segment->segname); 
-		//segpath.append(".seg");
 		string logpath;
 		logpath = rvm->directory;
-		//strcpy(path, tid->rvm->directory.c_str());
 		logpath.append("/");
-		//strcat(path, "/");
 		logpath.append(segment->segname);
 		logpath.append(".log");
 		//now we have both file paths - log and seg 
@@ -373,7 +416,6 @@ void rvm_truncate_log(rvm_t rvm)
 		//check if logfile is empty, then nothing to do
 		stat(logpath.c_str(), &filestat);
 		if(filestat.st_size == 0){
-			printf("logfile is empty - nothing to truncate - in trunc\n");
 			//go to next logfile
 			continue;
 		}
@@ -416,6 +458,8 @@ void rvm_truncate_log(rvm_t rvm)
 	    fwrite(segbuff, 1, seglength, segfp);
 	    fclose(segfp);
 	    fclose(logfp);
+		logfp = fopen(logpath.c_str(), "w");	//this writes blank log - clearing it
+		fclose(logfp);
 	    //log file completely truncated, move on to next segment in directory
 	}
 }
@@ -425,16 +469,11 @@ void rvm_truncate_remap_log(rvm_t rvm, string segname)
 	//now we can get the name of the segment to  create the path of file
 	string segpath;
 	segpath = rvm->directory;
-	//strcpy(path, tid->rvm->directory.c_str());
 	segpath.append("/");
-	//strcat(path, "/");
 	segpath.append(segname); 
-	//segpath.append(".seg");
 	string logpath;
 	logpath = rvm->directory;
-	//strcpy(path, tid->rvm->directory.c_str());
 	logpath.append("/");
-	//strcat(path, "/");
 	logpath.append(segname);
 	logpath.append(".log");
 	//now we have both file paths - log and seg 
@@ -471,6 +510,7 @@ void rvm_truncate_remap_log(rvm_t rvm, string segname)
     	//sort through line based on delimiter
     	int offset = atoi(strtok(line, "|||||"));
     	int size = atoi(strtok(NULL, "|||||"));
+    	
     	//fp at end of line - grab the data from logfile now
     	//read from the logfile (@fp + size) into the segmentbuffer(+offset)
     	fread((segbuff + offset), 1, size, logfp);
@@ -484,6 +524,8 @@ void rvm_truncate_remap_log(rvm_t rvm, string segname)
     FILE* segfp = fopen(segpath.c_str(), "w");
     fwrite(segbuff, 1, seglength, segfp);
     fclose(segfp);
+    fclose(logfp);
+    logfp = fopen(logpath.c_str(), "w");	//this writes blank log - clearing it
     fclose(logfp);
     //log file completely truncated, move on to next segment in directory
 }
