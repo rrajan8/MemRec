@@ -1,4 +1,4 @@
-recoverable virtual memory (rvm.a)
+recoverable virtual memory (librvm.a)
 
 Vikash Ramkumar
 Rahol Rajan
@@ -11,13 +11,13 @@ HOW TO COMPILE:
 	
 	$make
 	
-3) This creates the file rvm.a .
+3) This creates the file librvm.a .
 4) Go over to test_cases directory and run make to compile tests in this 
    directory
 5) If you are compiling your own source with the library, run the following 
    command:
 
-g++ -std=c++11 -Wall -g -I. myexample.c /path/to/rvm.a -o myexample
+g++ -std=c++11 -Wall -g -I. myexample.c /path/to/librvm.a -o myexample
 ./myexample
 
 NOTE: please specify path to rvm.h in the includes in myexample.c and

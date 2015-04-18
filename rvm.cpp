@@ -1,4 +1,4 @@
-#include "rvm_internal.h"
+#include "rvm.h"
 #include <string>
 #include <sstream>
 #include <iostream>
@@ -60,7 +60,6 @@ rvm_t rvm_init(const char *directory)
 		command.append(location);
 		command.append("/*.seg 2>&1");
 		
-		int numsegs = 0;
 		int flag = 1;
 		FILE *proc = popen(command.c_str(),"r");
 		char buf[300];
@@ -223,6 +222,7 @@ void rvm_destroy(rvm_t rvm, const char *segname)
 	seg_name.append(".seg");
 	if(rvm->seglist.find(seg_name) == rvm->seglist.end() )
 	{
+		cout << "segment does not exist" << endl;
 		return;
 	}
 	if(rvm->seglist[seg_name]->baseaddr != NULL )

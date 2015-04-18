@@ -1,7 +1,24 @@
-all:
-	g++ -std=c++11 -c -o rvm.o rvm.cpp
-	ar rc rvm.a rvm.o
-	ranlib rvm.a
-	
+#### RVM Library Makefile
+
+CFLAGS  = -std=c++11 -Wall -g -I.
+LFLAGS  =
+CC      = g++
+RM      = /bin/rm -rf
+AR      = ar rc
+RANLIB  = ranlib
+
+LIBRARY = librvm.a
+
+LIB_SRC = rvm.cpp
+
+LIB_OBJ = $(patsubst %.cpp,%.o,$(LIB_SRC))
+
+%.o: %.cpp
+	$(CC) -c $(CFLAGS) $< -o $@
+
+$(LIBRARY): $(LIB_OBJ)
+	$(AR) $(LIBRARY) $(LIB_OBJ)
+	$(RANLIB) $(LIBRARY)
+
 clean:
-	rm *.o *.a
+	$(RM) $(LIBRARY) $(LIB_OBJ)

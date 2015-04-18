@@ -1,6 +1,6 @@
 CC = g++
 CFLAGS  = -std=c++11 -Wall -g -I.
-LDLIBS ?= ../rvm.a
+LDLIBS ?= ../librvm.a
 
 all:	abort truncate basic multi-abort multi
 
